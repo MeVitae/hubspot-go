@@ -34,7 +34,7 @@ type Client struct {
 	Companies          *CompaniesService
 	Contacts           *ContactsService
 }
-
+ 
 type service struct {
 	client *Client
 }
