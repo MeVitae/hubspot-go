@@ -9,16 +9,12 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"reflect"
-	"strconv"
 	"strings"
-	"sync"
-	"time"
 )
 const (
-	Version = "v1.0.0"
-
 	defaultBaseURL    = "https://api.hubspot.com/"
+
+	mediaTypeV3 = "*/*"
 )
 
 var errNonNilContext = errors.New("context must be non-nil")
@@ -27,7 +23,7 @@ var errNonNilContext = errors.New("context must be non-nil")
 type Client struct {
 	client   *http.Client // HTTP client used to communicate with the API.
 
-	// Base URL for API requests. Defaults to the public Hubspoit API
+	// Base URL for API requests. Defaults to the public Hubspot API
 	// BaseURL should always be specified with a trailing slash.
 	BaseURL *url.URL
 
@@ -57,6 +53,9 @@ func NewClient(httpClient *http.Client) *Client {
 	c.initialize()
 	return c
 }
+
+// RequestOption represents an option that can modify an http.Request.
+type RequestOption func(req *http.Request)
 
 // NewRequest creates an API request. A relative URL can be provided in urlStr,
 // in which case it is resolved relative to the BaseURL of the Client.
@@ -93,10 +92,6 @@ func (c *Client) NewRequest(method, urlStr string, body interface{}, opts ...Req
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", mediaTypeV3)
-	if c.UserAgent != "" {
-		req.Header.Set("User-Agent", c.UserAgent)
-	}
-	req.Header.Set(headerAPIVersion, defaultAPIVersion)
 
 	for _, opt := range opts {
 		opt(req)
@@ -139,11 +134,10 @@ func (c *Client) initialize() {
 
 // copy returns a copy of the current client. It must be initialized before use.
 func (c *Client) copy() *Client {
-	c.clientMu.Lock()
 	// can't use *c here because that would copy mutexes by value.
 	clone := Client{
 		client:                  &http.Client{},
-		BaseURL:                 c.BaseURL
+		BaseURL:                 c.BaseURL,
 	}
 	if c.client != nil {
 		clone.client.Transport = c.client.Transport
@@ -154,107 +148,9 @@ func (c *Client) copy() *Client {
 	return &clone
 }
 
-// BareDo sends an API request and lets you handle the api response. If an error
-// or API Error occurs, the error will contain more information. Otherwise you
-// are supposed to read and close the response's Body. If rate limit is exceeded
-// and reset time is in the future, BareDo returns *RateLimitError immediately
-// without making a network API call.
-//
-// The provided ctx must be non-nil, if it is nil an error is returned. If it is
-// canceled or times out, ctx.Err() will be returned.
-func (c *Client) BareDo(ctx context.Context, req *http.Request) (*Response, error) {
-	if ctx == nil {
-		return nil, errNonNilContext
-	}
-
-	req = withContext(ctx, req)
-
-	rateLimitCategory := GetRateLimitCategory(req.Method, req.URL.Path)
-
-	if bypass := ctx.Value(bypassRateLimitCheck); bypass == nil {
-		// If we've hit rate limit, don't make further requests before Reset time.
-		if err := c.checkRateLimitBeforeDo(req, rateLimitCategory); err != nil {
-			return &Response{
-				Response: err.Response,
-				Rate:     err.Rate,
-			}, err
-		}
-		// If we've hit a secondary rate limit, don't make further requests before Retry After.
-		if err := c.checkSecondaryRateLimitBeforeDo(req); err != nil {
-			return &Response{
-				Response: err.Response,
-			}, err
-		}
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		// If we got an error, and the context has been canceled,
-		// the context's error is probably more useful.
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
-		}
-
-		// If the error type is *url.Error, sanitize its URL before returning.
-		if e, ok := err.(*url.Error); ok {
-			if url, err := url.Parse(e.URL); err == nil {
-				e.URL = sanitizeURL(url).String()
-				return nil, e
-			}
-		}
-
-		return nil, err
-	}
-
-	response := newResponse(resp)
-
-	// Don't update the rate limits if this was a cached response.
-	// X-From-Cache is set by https://github.com/gregjones/httpcache
-	if response.Header.Get("X-From-Cache") == "" {
-		c.rateMu.Lock()
-		c.rateLimits[rateLimitCategory] = response.Rate
-		c.rateMu.Unlock()
-	}
-
-	err = CheckResponse(resp)
-	if err != nil {
-		defer resp.Body.Close()
-		// Special case for AcceptedErrors. If an AcceptedError
-		// has been encountered, the response's payload will be
-		// added to the AcceptedError and returned.
-		//
-		// Issue #1022
-		aerr, ok := err.(*AcceptedError)
-		if ok {
-			b, readErr := io.ReadAll(resp.Body)
-			if readErr != nil {
-				return response, readErr
-			}
-
-			aerr.Raw = b
-			err = aerr
-		}
-
-		rateLimitError, ok := err.(*RateLimitError)
-		if ok && req.Context().Value(SleepUntilPrimaryRateLimitResetWhenRateLimited) != nil {
-			if err := sleepUntilResetWithBuffer(req.Context(), rateLimitError.Rate.Reset.Time); err != nil {
-				return response, err
-			}
-			// retry the request once when the rate limit has reset
-			return c.BareDo(context.WithValue(req.Context(), SleepUntilPrimaryRateLimitResetWhenRateLimited, nil), req)
-		}
-
-		// Update the secondary rate limit if we hit it.
-		rerr, ok := err.(*AbuseRateLimitError)
-		if ok && rerr.RetryAfter != nil {
-			c.rateMu.Lock()
-			c.secondaryRateLimitReset = time.Now().Add(*rerr.RetryAfter)
-			c.rateMu.Unlock()
-		}
-	}
-	return response, err
+func withContext(ctx context.Context, req *http.Request) *http.Request {
+	// No-op because App Engine adds context to a request differently.
+	return req
 }
 
 // Do sends an API request and returns the API response. The API response is
@@ -262,30 +158,25 @@ func (c *Client) BareDo(ctx context.Context, req *http.Request) (*Response, erro
 // error if an API error has occurred. If v implements the io.Writer interface,
 // the raw response body will be written to v, without attempting to first
 // decode it. If v is nil, and no error happens, the response is returned as is.
-// If rate limit is exceeded and reset time is in the future, Do returns
-// *RateLimitError immediately without making a network API call.
 //
 // The provided ctx must be non-nil, if it is nil an error is returned. If it
 // is canceled or times out, ctx.Err() will be returned.
-func (c *Client) Do(ctx context.Context, req *http.Request, v interface{}) (*Response, error) {
-	resp, err := c.BareDo(ctx, req)
-	if err != nil {
-		return resp, err
+func (c *Client) Do(ctx context.Context, req *http.Request, v interface{}) (*http.Response, error) {
+	if ctx == nil {
+		return nil, errNonNilContext
 	}
-	defer resp.Body.Close()
 
-	switch v := v.(type) {
-	case nil:
-	case io.Writer:
-		_, err = io.Copy(v, resp.Body)
-	default:
-		decErr := json.NewDecoder(resp.Body).Decode(v)
-		if decErr == io.EOF {
-			decErr = nil // ignore EOF errors caused by empty response body
-		}
-		if decErr != nil {
-			err = decErr
-		}
-	}
+	req = withContext(ctx, req)
+
+
+	resp, err := c.client.Do(req)
+	
 	return resp, err
+}
+
+// roundTripperFunc creates a RoundTripper (transport)
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return fn(r)
 }
