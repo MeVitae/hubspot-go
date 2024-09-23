@@ -55,6 +55,7 @@ type PostCompanyProperties struct {
 	Name					string 			`json:"name,omitempty"`
 	ATS						string 			`json:"ats,omitempty"`
 	CompanySize				string 			`json:"company_size,omitempty"`
+	TimeZone				string 			`json:"timezone",omitempty"`
 }
 
 type PostCompanyResponse struct {

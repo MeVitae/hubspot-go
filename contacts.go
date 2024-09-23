@@ -54,6 +54,12 @@ type PostContactProperties struct {
 	Email				string 			`json:"email,omitempty"`
 	FirstName			string 			`json:"firstname,omitempty"`
 	LastName 			string 			`json:"lastname,omitempty"`
+	HowTheyHeard		string 			`json:"how_they_heard_about_mevitae",omitempty`
+	HubspotOwnerId		string			`json:"hubspot_owner_id",omitempty`
+	CompanySize			string			`json:"company_size",omitempty`
+	Country				string 			`json:"country",omitempty`
+	LeadStatus			string			`json:"hs_lead_status",omitempty`
+	LegalBasis			string			`json:"hs_legal_basis",omitempty`
 }
 
 
