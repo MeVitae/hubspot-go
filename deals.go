@@ -56,6 +56,25 @@ type DealsPostResponse struct {
 	Archived  bool      `json:"archived,omitempty"`
 }
 
+type SeachDealsResponse struct {
+	Total   int `json:"total"`
+	Results []struct {
+		ID         string `json:"id"`
+		Properties struct {
+			Amount             any       `json:"amount"`
+			Closedate          any       `json:"closedate"`
+			Createdate         time.Time `json:"createdate"`
+			Dealname           string    `json:"dealname"`
+			Dealstage          string    `json:"dealstage"`
+			HsLastmodifieddate time.Time `json:"hs_lastmodifieddate"`
+			HsObjectID         string    `json:"hs_object_id"`
+			Pipeline           string    `json:"pipeline"`
+		} `json:"properties"`
+		CreatedAt time.Time `json:"createdAt"`
+		UpdatedAt time.Time `json:"updatedAt"`
+		Archived  bool      `json:"archived"`
+	} `json:"results"`
+}
 
 // An API call object for Hubspot, can be used to create Deals, Companies and Contacts.
 //
@@ -98,7 +117,14 @@ type Types struct {
 	AssociationTypeId 		int 				`json:"associationTypeId"`
 }
 
-
+type SearchDeals struct {
+	Query        			string   				`json:"query,omitempty"`
+	Limit        			int      				`json:"limit,omitempty"`
+	After        			string   				`json:"after,omitempty"`
+	Sorts        			[]string 				`json:"sorts,omitempty"`
+	Properties   			[]string 				`json:"properties,omitempty"`
+	FilterGroups 			[]SearchFilterGroups 	`json:"filterGroups,omitempty"`
+}
 // PostDeal creates a deal with the properties that will be defined.
 
 func (s *DealsService) PostDeal(ctx context.Context, mapping *PostDeals) (DealsPostResponse, error) {
@@ -109,6 +135,28 @@ func (s *DealsService) PostDeal(ctx context.Context, mapping *PostDeals) (DealsP
 	}
 
 	m := new(PostDeals)
+	resp, err := s.client.Do(ctx, req, m)
+	if err != nil {
+		return result, err
+	}
+
+	defer resp.Body.Close()
+    body, err := ioutil.ReadAll(resp.Body) // response body is []byte
+
+    if err := json.Unmarshal(body, &result); err != nil {  // Parse []byte to the go struct pointer
+        return result, err
+    }
+	return result, nil
+}
+
+func (s *DealsService) SearchDeals(ctx context.Context, mapping *SearchDeals) (SeachDealsResponse, error) {
+	req, err := s.client.NewRequest("POST", "crm/v3/objects/deals/search", mapping)
+	var result SeachDealsResponse
+	if err != nil {
+		return result, err
+	}
+
+	m := new(SearchDeals)
 	resp, err := s.client.Do(ctx, req, m)
 	if err != nil {
 		return result, err

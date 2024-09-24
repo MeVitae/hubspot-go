@@ -60,6 +60,7 @@ type PostContactProperties struct {
 	Country				string 			`json:"country",omitempty`
 	LeadStatus			string			`json:"hs_lead_status",omitempty`
 	LegalBasis			string			`json:"hs_legal_basis",omitempty`
+	PhoneNumber			string			`json:"phone",omitempty`
 }
 
 
